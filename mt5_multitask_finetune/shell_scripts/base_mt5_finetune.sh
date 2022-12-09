@@ -1,0 +1,1 @@
+nohup python finetune.py --config_file_pth=/raid/zyftest/project/Med0/mt5_multitask_finetune/config_files/base_mt5_train_config > ./training_log/base_zh_mt5_2.log 2>&1

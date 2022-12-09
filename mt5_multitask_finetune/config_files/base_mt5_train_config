@@ -1,0 +1,26 @@
+[model_dir]
+path = "/raid/yiptmp/huggingface-models/mt5_medical_base"
+
+[dataset_config]
+local_data_pth = "/raid/yiptmp/nlp_prepare_dataset/med0_dataset/tasks_zh_medical"
+tasks_name_list_pth = "/raid/zyftest/project/Med0/mt5_multitask_finetune/config_files/zh_med_task_names.json"
+dataset_info_pth = "/raid/zyftest/project/Med0/mt5_multitask_finetune/config_files/dataset_info.json"
+
+[train_strategy]
+mesh_shape = "model:1, batch:4"
+mesh_devices = ['gpu:0', 'gpu:1', 'gpu:2', 'gpu:3']
+batch_size = 16
+sequence_length = {'inputs': 1024, 'targets': 256}
+learning_rate_schedule = 0.001
+save_checkpoints_steps = 100000
+keep_checkpoint_max = 1
+iterations_per_loop = 100
+finetune_steps = 100000
+
+[export_strategy]
+batch_size = 1
+checkpoint_step = -1
+export_dir = "/raid/zyftest/project/Med0/mt5_multitask_finetune/export_model/base_mt5"
+keep_checkpoint_max = -1
+beam_size = 1
+temperature = 1.0

@@ -1,0 +1,58 @@
+{
+  "list_entities_mentioned_test.json": {
+    "f1": 37.110920034393814,
+    "recall": 33.21533015237802,
+    "acc": 42.04169101889733,
+    "right_num": 2158,
+    "label_entities": 6497,
+    "prediction_len": 5133
+  },
+  "list_entities_mentioned_after_text_test.json": {
+    "f1": 36.379370024229836,
+    "recall": 32.35339387409574,
+    "acc": 41.549713382091326,
+    "right_num": 2102,
+    "label_entities": 6497,
+    "prediction_len": 5059
+  },
+  "simple_question_asking_response_as_text_test.json": {
+    "f1": 38.196650923142975,
+    "recall": 34.23118362321071,
+    "acc": 43.2012432012432,
+    "right_num": 2224,
+    "label_entities": 6497,
+    "prediction_len": 5148
+  },
+  "identify_entities_names_mentioned_test.json": {
+    "f1": 37.24102209944751,
+    "recall": 33.19993843312298,
+    "acc": 42.40220169058384,
+    "right_num": 2157,
+    "label_entities": 6497,
+    "prediction_len": 5087
+  },
+  "simple_question_asking_response_as_text_after_text_test.json": {
+    "f1": 36.70117204209086,
+    "recall": 33.015237802062494,
+    "acc": 41.313559322033896,
+    "right_num": 2145,
+    "label_entities": 6497,
+    "prediction_len": 5192
+  },
+  "add_all_templates": {
+    "f1": 48.29284307288246,
+    "recall": 67.923657072495,
+    "acc": 37.46498004924017,
+    "right_num": 4413,
+    "label_entities": 6497,
+    "prediction_len": 11779
+  },
+  "vote_by_all_templates": {
+    "f1": 43.69063772048847,
+    "recall": 44.6052024011082,
+    "acc": 42.812823164426064,
+    "right_num": 2898,
+    "label_entities": 6497,
+    "prediction_len": 6769
+  }
+}

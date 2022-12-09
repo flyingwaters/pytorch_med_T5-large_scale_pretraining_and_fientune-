@@ -1,0 +1,9 @@
+nohup: ignoring input
+2022-10-31 17:41:40.314978: I tensorflow/stream_executor/platform/default/dso_loader.cc:48] Successfully opened dynamic library libcudart.so.10.1
+WARNING:tensorflow:From /home/zyftest/anaconda3/envs/t0/lib/python3.7/site-packages/tensorflow/python/compat/v2_compat.py:96: disable_resource_variables (from tensorflow.python.ops.variable_scope) is deprecated and will be removed in a future version.
+Instructions for updating:
+non-resource variables are not supported in the long term
+Traceback (most recent call last):
+  File "finetune.py", line 192, in <module>
+  File "finetune.py", line 135, in train
+FileNotFoundError: [Errno 2] No such file or directory: '/raid/yiptmp/nlp_prepare_dataset/med0_dataset/tasks_zh_medical/re_task'

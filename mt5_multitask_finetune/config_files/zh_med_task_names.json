@@ -1,0 +1,17 @@
+[
+  "disease_location",
+  "disease_name_generate",
+  "question_gen",
+  "text_rewrite",
+  "QA",
+  "ner",
+  "text2sql",
+  "qa_skg",
+  "normalize_task",
+  "text_sim",
+  "indent_classification",
+  "slot",
+  "medical_summary",
+  "text_classification",
+  "QA_choice"
+]

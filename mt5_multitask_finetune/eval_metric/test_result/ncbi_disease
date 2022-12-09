@@ -1,0 +1,58 @@
+{
+  "list_diseases_mentioned_test.json": {
+    "f1": 85.86878154289835,
+    "recall": 87.31671554252199,
+    "acc": 84.46808510638299,
+    "right_num": 1191,
+    "label_entities": 1364,
+    "prediction_len": 1410
+  },
+  "simple_question_asking_response_as_text_test.json": {
+    "f1": 85.58038932948811,
+    "recall": 87.02346041055719,
+    "acc": 84.18439716312058,
+    "right_num": 1187,
+    "label_entities": 1364,
+    "prediction_len": 1410
+  },
+  "list_diseases_mentioned_after_text_test.json": {
+    "f1": 85.25179856115108,
+    "recall": 86.87683284457478,
+    "acc": 83.6864406779661,
+    "right_num": 1185,
+    "label_entities": 1364,
+    "prediction_len": 1416
+  },
+  "simple_question_asking_response_as_text_after_text_test.json": {
+    "f1": 85.07246376811595,
+    "recall": 86.07038123167156,
+    "acc": 84.09742120343839,
+    "right_num": 1174,
+    "label_entities": 1364,
+    "prediction_len": 1396
+  },
+  "identify_diseases_names_mentioned_test.json": {
+    "f1": 85.60057887120115,
+    "recall": 86.73020527859238,
+    "acc": 84.5,
+    "right_num": 1183,
+    "label_entities": 1364,
+    "prediction_len": 1400
+  },
+  "add_all_templates": {
+    "f1": 82.78008298755186,
+    "recall": 87.7565982404692,
+    "acc": 78.33769633507853,
+    "right_num": 1197,
+    "label_entities": 1364,
+    "prediction_len": 1528
+  },
+  "vote_by_all_templates": {
+    "f1": 85.15850144092218,
+    "recall": 86.65689149560117,
+    "acc": 83.71104815864022,
+    "right_num": 1182,
+    "label_entities": 1364,
+    "prediction_len": 1412
+  }
+}
