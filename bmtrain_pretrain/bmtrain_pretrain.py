@@ -1,27 +1,19 @@
 from dataset_test import pretrain_dataset
-import logging
 import math
 import torch
-import os
-import sys
 import time
-import datasets
+import os
+from typing import List, Dict, Optional
 import bmtrain as bmt
-from dataclasses import asdict, dataclass, field
 from model_center.dataset import DistributedDataLoader
 from tensorboardX import SummaryWriter
 
 # You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
-from enum import Enum
 from itertools import chain
-from pathlib import Path
-from typing import Dict, List, Optional
 
 import numpy as np
-from datasets import load_dataset
-from tqdm import tqdm
+from datasets import load_from_disk
 
-import flax
 from transformers import (
     BatchEncoding,
     PreTrainedTokenizerBase,
@@ -94,37 +86,71 @@ def generate_preprocess_splits(samples_idx: np.ndarray, batch_size: int, drop_la
 
 
 # the global variables that the following functions need
-model_name = "mt5-xxl"
+model_name = "mt5-large"
 text_column_name = "text"
-train_batch_size = 1
+train_batch_size = 128
 max_seq_length = 1024 if model_name == "mt5-xxl" else 512
-epochs = 30
+epochs = 5
 # split the large dataset into small part to make it faster to process
-preprocess_part_size = 1000
+preprocess_part_size = 5000
 
 bmt.init_distributed(seed=0, zero_level=3)
 model = T5.from_pretrained(model_name)
 tokenizer = T5Tokenizer.from_pretrained(model_name)
 bmt.synchronize()
 
+tokenized_datasets = load_from_disk(
+    "/raid/yiptmp/zh_corpus/zh_medical_tsv/processed_data")
 
-##############################################
-def tokenize_function(examples):
-    return tokenizer(examples[text_column_name], return_attention_mask=False)
-
-
-dataset = load_dataset(
-    "/raid/zyftest/project/med_T5/bmtrain_pretrain/pretrain_dataset.py", cache_dir="/raid/zyftest/cache_huggingface")
 bmt.synchronize()
-columns_name = dataset["train"].column_names
-tokenized_datasets = dataset.map(
-    tokenize_function,
-    batched=True,
-    num_proc=20,
-    remove_columns=columns_name
-)
-# mean_noise_span_length = 3.0
-# noise_density = 0.15
+
+
+def compute_input_and_target_lengths(inputs_length, noise_density, mean_noise_span_length):
+    """This function is copy of `random_spans_helper <https://github.com/google-research/text-to-text-transfer-transformer/blob/84f8bcc14b5f2c03de51bd3587609ba8f6bbd1cd/t5/data/preprocessors.py#L2466>`__ .
+    Training parameters to avoid padding with random_spans_noise_mask.
+    When training a model with random_spans_noise_mask, we would like to set the other
+    training hyperparmeters in a way that avoids padding.
+    This function helps us compute these hyperparameters.
+    We assume that each noise span in the input is replaced by extra_tokens_per_span_inputs sentinel tokens,
+    and each non-noise span in the targets is replaced by extra_tokens_per_span_targets sentinel tokens.
+    This function tells us the required number of tokens in the raw example (for split_tokens())
+    as well as the length of the encoded targets. Note that this function assumes
+    the inputs and targets will have EOS appended and includes that in the reported length.
+    Args:
+        inputs_length: an integer - desired length of the tokenized inputs sequence
+        noise_density: a float
+        mean_noise_span_length: a float
+    Returns:
+        tokens_length: length of original text in tokens
+        targets_length: an integer - length in tokens of encoded targets sequence
+    """
+
+    def _tokens_length_to_inputs_length_targets_length(tokens_length):
+        num_noise_tokens = int(round(tokens_length * noise_density))
+        num_nonnoise_tokens = tokens_length - num_noise_tokens
+        num_noise_spans = int(round(num_noise_tokens / mean_noise_span_length))
+        # inputs contain all nonnoise tokens, sentinels for all noise spans
+        # and one EOS token.
+        _input_length = num_nonnoise_tokens + num_noise_spans + 1
+        _output_length = num_noise_tokens + num_noise_spans + 1
+        return _input_length, _output_length
+
+    tokens_length = inputs_length
+
+    while _tokens_length_to_inputs_length_targets_length(tokens_length + 1)[0] <= inputs_length:
+        tokens_length += 1
+
+    inputs_length, targets_length = _tokens_length_to_inputs_length_targets_length(
+        tokens_length)
+
+    # minor hack to get the targets length to be equal to inputs length
+    # which is more likely to have been set to a nice round number.
+    if noise_density == 0.5 and targets_length > inputs_length:
+        tokens_length -= 1
+        targets_length -= 1
+    return tokens_length, targets_length
+
+
 expanded_inputs_length, targets_length = compute_input_and_target_lengths(
     inputs_length=max_seq_length,
     noise_density=0.15,
@@ -155,17 +181,18 @@ class FlaxDataCollatorForT5MLM:
         decoder_start_token_id: (:obj:`int):
             The decoder start token id of the model
     """
+
     def __init__(self, tokenizer: PreTrainedTokenizerBase,
-                        noise_density: float,
-                        mean_noise_span_length: float,
-                        input_length: int,
-                        target_length: int,
-                        pad_token_id: int,
-                        decoder_start_token_id: int):
-        self.tokenizer = tokenizer 
+                 noise_density: float,
+                 mean_noise_span_length: float,
+                 input_length: int,
+                 target_length: int,
+                 pad_token_id: int,
+                 decoder_start_token_id: int):
+        self.tokenizer = tokenizer
         self.noise_density = noise_density
         self.mean_noise_span_length = mean_noise_span_length
-        self.input_length = input_length 
+        self.input_length = input_length
         self.target_length = target_length
         self.pad_token_id = pad_token_id
         self.decoder_start_token_id = decoder_start_token_id
@@ -238,7 +265,6 @@ class FlaxDataCollatorForT5MLM:
         batch["dec_length"] = torch.stack(dec_length).cuda()
         batch["target"] = torch.stack(targets).cuda()
         batch["index"] = torch.stack(indexs).cuda()
-
         return batch
 
     def create_sentinel_ids(self, mask_indices):
@@ -342,33 +368,6 @@ class FlaxDataCollatorForT5MLM:
         return is_noise[:orig_length]
 
 
-def group_texts(examples):
-    # Concatenate all texts.
-    concatenated_examples = {
-        k: list(chain(*examples[k])) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
-    # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-    # customize this part to your needs.
-    if total_length >= expanded_inputs_length:
-        total_length = (total_length // expanded_inputs_length) * \
-            expanded_inputs_length
-    # Split by chunks of max_len.
-    result = {
-        k: [t[i: i + expanded_inputs_length]
-            for i in range(0, total_length, expanded_inputs_length)]
-        for k, t in concatenated_examples.items()
-    }
-    return result
-
-
-# process dataset to concate de
-tokenized_datasets = tokenized_datasets.map(
-    group_texts,
-    batched=True,
-    batch_size=2000,
-    num_proc=20
-)
-
 data_collator = FlaxDataCollatorForT5MLM(
     tokenizer=tokenizer,
     noise_density=0.15,
@@ -380,6 +379,7 @@ data_collator = FlaxDataCollatorForT5MLM(
 )
 
 num_train_samples = len(tokenized_datasets["train"])
+bmt.print_rank(f"num_train: {num_train_samples}")
 # Avoid using jax.numpy here in case of TPU training
 train_samples_idx = np.random.permutation(np.arange(num_train_samples))
 train_batch_idx = generate_preprocess_splits(
@@ -389,11 +389,12 @@ train_batch_idx = generate_preprocess_splits(
 bmt.synchronize()
 # get the memory usage
 bmt.print_rank("Model mem\n", torch.cuda.memory_summary())
-optimizer = bmt.optim.AdamOffloadOptimizer(model.parameters(), lr=1e-3)
+optimizer = bmt.optim.AdamOffloadOptimizer(
+    model.parameters(), lr=1e-3, weight_decay=1e-2)
 lr_scheduler = bmt.lr_scheduler.Noam(
     optimizer,
     start_lr=1e-5,
-    warmup_iter=100,
+    warmup_iter=2000,
     end_iter=-1)
 loss_func = bmt.loss.FusedCrossEntropy(ignore_index=-100)
 # before backward scale the loss up to 1024*old_loss and after backward scale the grad down to grad/1024
@@ -405,8 +406,10 @@ t = time.gmtime()
 f_t = time.strftime("%Y-%m-%d %H:%M:%S", t)
 bmt.print_rank(f"#########  training~!!! start time: {f_t}  ###########")
 step_iter = 0
-writer = SummaryWriter('runs/pretrain_loss') 
+bmt.synchronize()
+writer = SummaryWriter('runs/pretrain_loss')
 
+model.train()
 for epoch in range(1, epochs+1):
     for sample_num, batch_idx in enumerate(train_batch_idx):
         samples = [tokenized_datasets["train"][int(idx)] for idx in batch_idx]
@@ -414,11 +417,10 @@ for epoch in range(1, epochs+1):
         train_dataset = pretrain_dataset(model_inputs.data)
         train_dataloader = DistributedDataLoader(
             train_dataset, batch_size=train_batch_size, shuffle=True)
-        model.train()
         for step_n, data in enumerate(train_dataloader):
-            # for tensorboard 
+            # for tensorboard
             s_1 = time.time()
-            step_iter+=1
+            step_iter += 1
             enc_input = data["enc_input"]
             enc_length = data["enc_length"]
             dec_input = data["dec_input"]
@@ -433,15 +435,17 @@ for epoch in range(1, epochs+1):
                 logits.view(-1, logits.shape[-1]), targets.view(-1))
             # use bmt.sum_loss(loss) to gather all loss information from all distributed processes
             global_loss = bmt.sum_loss(loss).item()
-            # tensorboardX gather the loss 
+            # tensorboardX gather the loss
             # visualise the actual loss
-            writer.add_scalar('loss', global_loss, global_step = step_iter)
+            writer.add_scalar('loss', global_loss, global_step=step_iter)
+            writer.add_scalar(
+                "lr_rate", lr_scheduler.current_lr, global_step=step_iter)
             # like the function of pytorch why ? manager?
             # zero grad
             optim_manager.zero_grad()
             # scale loss before backward to avoid precision underflow of fp16
             optim_manager.backward(loss)
-            # clip gradient norm
+            # clip gradient norm to solve gradient bottom
             grad_norm = optim_manager.clip_grad_norm(
                 optimizer.param_groups, max_norm=10.0, norm_type=2)
             # step for all optimizer inside optim_manager
@@ -459,6 +463,6 @@ for epoch in range(1, epochs+1):
                 )
             )
             # save model and tensorboard
-    if epoch==1 or (epoch>0 and epoch%10==0):
-        bmt.save(model, f"transformer_mt5_xxl_ckpt-{epoch}-{step_iter}.pt")
-    
+    if epoch % 2 == 1:
+        bmt.save(model, f"transformer_mt5_large_ckpt-{epoch}-{step_iter}.pt")
+writer.close()
