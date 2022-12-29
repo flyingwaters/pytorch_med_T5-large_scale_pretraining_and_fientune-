@@ -84,7 +84,7 @@ class pretrain_dataset(torch.utils.data.Dataset):
         self.data = data
 
     def __len__(self):
-        return len(self.data)
+        return len(self.data["input_ids"])
 
     def __getitem__(self, idx):
         return {"input_ids": self.data["input_ids"][idx],
