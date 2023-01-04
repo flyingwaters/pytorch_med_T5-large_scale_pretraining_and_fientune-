@@ -1,26 +1,25 @@
-from dataset_test import pretrain_dataset
-import math
-import torch
-import time
-import os
-from typing import List, Dict, Optional
-import bmtrain as bmt
-from model_center.dataset import DistributedDataLoader
-from tensorboardX import SummaryWriter
-
-# You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
-from itertools import chain
-
-import numpy as np
-from datasets import load_from_disk
-
+from transformers.models.t5.modeling_flax_t5 import shift_tokens_right
+from model_center.model import T5, T5Config
+from model_center.tokenizer import T5Tokenizer
 from transformers import (
     BatchEncoding,
     PreTrainedTokenizerBase,
 )
-from model_center.tokenizer import T5Tokenizer
-from model_center.model import T5
-from transformers.models.t5.modeling_flax_t5 import shift_tokens_right
+from datasets import load_from_disk
+import numpy as np
+from itertools import chain
+from tensorboardX import SummaryWriter
+from model_center.dataset import DistributedDataLoader
+import bmtrain as bmt
+from typing import List, Dict, Optional
+import torch
+from dataset_test import pretrain_dataset
+import math
+import time
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5,6,7"
+
+# You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
 
 def compute_input_and_target_lengths(inputs_length, noise_density, mean_noise_span_length):
@@ -90,17 +89,24 @@ model_name = "mt5-large"
 text_column_name = "text"
 train_batch_size = 128
 max_seq_length = 1024 if model_name == "mt5-xxl" else 512
-epochs = 5
+epochs = 10
 # split the large dataset into small part to make it faster to process
-preprocess_part_size = 5000
-
+preprocess_part_size = 128000
+consume = True
+consume_pth = "/raid/zyftest/project/med_T5/bmtrain_pretrain/mt5_large-5-epoch-31500-steps.pt"
+consume_step = 31500
 bmt.init_distributed(seed=0, zero_level=3)
-model = T5.from_pretrained(model_name)
+if consume:
+    config = T5Config.from_pretrained(model_name)
+    model = T5(config)
+    bmt.load(model, consume_pth)
+else:
+    model = T5.from_pretrained(model_name)
 tokenizer = T5Tokenizer.from_pretrained(model_name)
 bmt.synchronize()
 
 tokenized_datasets = load_from_disk(
-    "/raid/yiptmp/zh_corpus/zh_medical_tsv/processed_data")
+    "/raid/yiptmp/zh_corpus/zh_medical_tsv/processed_data_512")
 
 bmt.synchronize()
 
@@ -393,8 +399,8 @@ optimizer = bmt.optim.AdamOffloadOptimizer(
     model.parameters(), lr=1e-3, weight_decay=1e-2)
 lr_scheduler = bmt.lr_scheduler.Noam(
     optimizer,
-    start_lr=1e-5,
-    warmup_iter=2000,
+    start_lr=1e-4,
+    warmup_iter=1000,
     end_iter=-1)
 loss_func = bmt.loss.FusedCrossEntropy(ignore_index=-100)
 # before backward scale the loss up to 1024*old_loss and after backward scale the grad down to grad/1024
@@ -405,13 +411,18 @@ optim_manager.add_optimizer(optimizer, lr_scheduler)
 t = time.gmtime()
 f_t = time.strftime("%Y-%m-%d %H:%M:%S", t)
 bmt.print_rank(f"#########  training~!!! start time: {f_t}  ###########")
-step_iter = 0
+if consume:
+    step_iter = 31500
+    dev_iter = 1275
+else:
+    step_iter = 0
+    dev_iter = 0
 bmt.synchronize()
 writer = SummaryWriter('runs/pretrain_loss')
 
 model.train()
 for epoch in range(1, epochs+1):
-    for sample_num, batch_idx in enumerate(train_batch_idx):
+    for sample_num, batch_idx in enumerate(train_batch_idx[:-1]):
         samples = [tokenized_datasets["train"][int(idx)] for idx in batch_idx]
         model_inputs = data_collator(samples)
         train_dataset = pretrain_dataset(model_inputs.data)
@@ -462,7 +473,56 @@ for epoch in range(1, epochs+1):
                     s_2-s_1,
                 )
             )
+
+        # dev validate the loss
+        if (sample_num-50) % 25 == 0:
+            # dev one part
+            model.eval()
+            # set batch_normalization and dropout the eval mode
+            bmt.print_rank(
+                "##################### dev steps ###################")
+            with torch.no_grad():
+                for sample_dev_num, batch_idx in enumerate(train_batch_idx[-1:]):
+                    samples = [tokenized_datasets["train"]
+                               [int(idx)] for idx in batch_idx]
+                    model_inputs = data_collator(samples)
+                    dev_dataset = pretrain_dataset(model_inputs.data)
+                    dev_dataloader = DistributedDataLoader(
+                        dev_dataset, batch_size=train_batch_size, shuffle=False)
+                    for step_n, data in enumerate(dev_dataloader):
+                        # for tensorboard
+                        s_1 = time.time()
+                        dev_iter += 1
+                        enc_input = data["enc_input"]
+                        enc_length = data["enc_length"]
+                        dec_input = data["dec_input"]
+                        dec_length = data["dec_length"]
+                        targets = data["target"]
+                        index = data["index"]
+                        output = model(enc_input, enc_length, dec_input,
+                                       dec_length, output_logits=True, return_dict=True)
+                        # calculate loss
+                        logits = output.logits
+                        loss = loss_func(
+                            logits.view(-1, logits.shape[-1]), targets.view(-1))
+                        # use bmt.sum_loss(loss) to gather all loss information from all distributed processes
+                        dev_loss = bmt.sum_loss(loss).item()
+                        # tensorboardX gather the loss
+                        # visualise the actual loss
+                        writer.add_scalar('dev_loss', dev_loss,
+                                          global_step=dev_iter)
+                        s_2 = time.time()
+                # print information only on rank 0 when distributed training
+                        bmt.print_rank(
+                            "epoch: {} | dev_loss: {:.4f} | steps: {} | time consume: {:.3f} ".format(
+                                epoch,
+                                dev_loss,
+                                dev_iter,
+                                s_2-s_1,))
             # save model and tensorboard
+            model.train()
+            bmt.print_rank(
+                "#############################  dev end #######################")
     if epoch % 2 == 1:
-        bmt.save(model, f"transformer_mt5_large_ckpt-{epoch}-{step_iter}.pt")
+        bmt.save(model, f"mt5_large-{epoch}-epoch-{step_iter}-steps.pt")
 writer.close()
